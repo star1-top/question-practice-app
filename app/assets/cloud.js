@@ -247,6 +247,22 @@ window.Q = window.Q || {};
     return true;
   }
 
+  async function uploadReportImage(blob) {
+    const userId = user && user.id || session && session.user && session.user.id;
+    if (!session || !userId) throw new Error('请先登录');
+    const key = 'question-reports/' + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2)) + '.jpg';
+    const path = cloud.storage.userPath(userId, key);
+    const { error } = await cloud.storage.upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+    if (error) throw new Error(error.message || '截图上传失败');
+    return path;
+  }
+
+  async function removeReportImage(path) {
+    if (!path || !session) return;
+    const { error } = await cloud.storage.remove([path]);
+    if (error) throw error;
+  }
+
   /* ---------------- 题库市场 ---------------- */
   async function listCatalog() {
     const { data, error } = await cloud.database.from('quiz_catalog')
@@ -415,7 +431,7 @@ window.Q = window.Q || {};
     listBanks, createBank, renameBank, updateBankData, deleteBank,
     listNotes, createNote, deleteNote,
     listCatalog, fetchCatalogBank, myUnlocks, unlock, recharge, buyCredits,
-    getProgress, saveProgress, reportQuestion,
+    getProgress, saveProgress, reportQuestion, uploadReportImage, removeReportImage,
     spend, refund, redeem, usageList, orderList,
     pingVisit, track
   };

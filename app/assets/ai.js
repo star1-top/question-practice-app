@@ -5,6 +5,7 @@ window.Q = window.Q || {};
   const cfg = window.Q_CONFIG.ai;
   let modelId = null;
   let modelReady = false;
+  let imageModelId = null;
 
   function logErr(e) { console.warn('[AI]', e); }
 
@@ -22,22 +23,28 @@ window.Q = window.Q || {};
    * 都没有才退回上下文最大的可用模型。挑模型直接决定单次调用成本，
    * 不要用「上下文最大」当唯一标准。
    */
-  async function pickModel() {
-    if (modelReady && modelId) return modelId;
+  async function pickModel(requireImages) {
+    if (requireImages && imageModelId) return imageModelId;
+    if (!requireImages && modelReady && modelId) return modelId;
     const client = Q.cloud.client;
     const models = await client.llm.models.list();
-    const list = (models || []).filter(m => m.disabled !== true && m.enabled !== false);
+    const list = (models || []).filter(m => m.disabled !== true && m.enabled !== false
+      && (!requireImages || (m.supportsImages === true && m.disabledMultimodal !== true)));
     if (!list.length) throw new Error('当前没有可用的 AI 模型');
 
     const prefer = (cfg.preferModels || []).slice();
     for (const want of prefer) {
       const hit = list.find(m => m.id === want);
-      if (hit) { modelId = hit.id; modelReady = true; return modelId; }
+      if (hit) {
+        if (requireImages) imageModelId = hit.id;
+        else { modelId = hit.id; modelReady = true; }
+        return hit.id;
+      }
     }
     const byCtx = list.slice().sort((a, b) => (b.maxInputTokens || 0) - (a.maxInputTokens || 0));
-    modelId = byCtx[0].id;
-    modelReady = true;
-    return modelId;
+    if (requireImages) imageModelId = byCtx[0].id;
+    else { modelId = byCtx[0].id; modelReady = true; }
+    return byCtx[0].id;
   }
 
   /* 统一流式调用：返回完整文本，边收边回调 */
@@ -50,7 +57,7 @@ window.Q = window.Q || {};
   async function chatViaCloud(messages, opts) {
     const client = Q.cloud.client;
     if (!client) throw new Error('云端未初始化');
-    const id = await pickModel();
+    const id = await pickModel(!!opts.vision);
 
     // 推理型模型不一定接受 response_format，被拒时去掉它重试一次
     const wantJson = !!opts.json;
@@ -144,6 +151,32 @@ window.Q = window.Q || {};
       throw new Error('AI 返回的内容不是合法 JSON，请重试一次');
     }
   }
+
+  AI.recognizeCorrectionScreenshot = async function (dataUrl, question) {
+    if (!/^data:image\/(jpeg|png|webp);base64,/.test(dataUrl || '')) throw new Error('请上传清晰的图片');
+    const context = '当前题目：' + String(question.stem || '').slice(0, 400)
+      + '\n当前选项：' + (question.options || []).map(o => o.k + '. ' + o.v).join('；').slice(0, 700)
+      + '\n当前答案：' + String(question.answer || '未录入');
+    const prompt = '只识别截图中明确可见的内容。判断截图是否对应当前题目；如果截图没有展示标准答案，不要推测答案。'
+      + '返回 JSON：{"matched":true/false,"visible_stem":"截图中的题干或空字符串","visible_options":[{"k":"A","v":"截图中的选项原文"}],"visible_answer":"截图明确标出的正确答案字母或空字符串","answer_visible":true/false,"evidence_text":"截图中的关键原文，最多300字","uncertainty":"不清晰或不一致之处"}。'
+      + '不要把用户选择的选项当成标准答案。\n' + context;
+    const raw = await AI.chat([
+      { role: 'system', content: '你是题库纠错截图的文字提取助手。只转录图像证据，不自行解题，不补造缺失内容。' },
+      { role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } }] }
+    ], { json: true, vision: true, temperature: 0 });
+    const result = extractJSON(raw);
+    return {
+      matched: result.matched === true || result.matched === 'true',
+      answer_visible: result.answer_visible === true || result.answer_visible === 'true',
+      visible_stem: String(result.visible_stem || '').slice(0, 500),
+      visible_options: Array.isArray(result.visible_options) ? result.visible_options.slice(0, 8)
+        .map(o => ({ k: String(o.k || '').toUpperCase().replace(/[^A-H]/g, '').slice(0, 1), v: String(o.v || '').slice(0, 300) }))
+        .filter(o => o.k && o.v) : [],
+      visible_answer: String(result.visible_answer || '').toUpperCase().replace(/[^A-H√X]/g, '').slice(0, 8),
+      evidence_text: String(result.evidence_text || '').slice(0, 300),
+      uncertainty: String(result.uncertainty || '').slice(0, 300)
+    };
+  };
 
   const SCHEMA_HINT = '{"chapters":[{"title":"章节标题","sec":"1.1","name":"章节名","questions":[{"no":1,"type":"单选题","stem":"题干","options":[{"k":"A","v":"选项"}],"answer":"C","note":"解析"}]}]}';
 

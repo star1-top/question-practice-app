@@ -7,6 +7,7 @@
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
   const uid = () => 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const todayKey = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const dateAfter = days => { const d = new Date(); d.setDate(d.getDate() + days); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const fmtDate = ts => { if (!ts) return ''; const d = new Date(ts); return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
   const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
 
@@ -19,12 +20,12 @@
     marketQ: '', marketOnly: 'all',
     db: null, notes: [], cloudBanksLoaded: false,
     filter: { main: '', sec: '', type: '', order: 'seq', scope: 'all', kw: '' },
-    pq: [], pi: 0, pSelected: [], pAnswered: false, pStat: { right: 0, done: 0 },
+    practiceMode: 'daily', pq: [], pi: 0, pSelected: [], pAnswered: false, pStat: { right: 0, done: 0 },
     sid: null, pFinished: false, bankTagAtStart: null, qAt: 0,
     exam: null, reciteShow: true, reciteLimit: 60,
     booted: false, saveTimer: null, pendingLoginReason: ''
   };
-  const defaultDb = () => ({ rec: {}, wrong: [], star: [], daily: {} });
+  const defaultDb = () => ({ rec: {}, wrong: [], star: [], daily: {}, study: { daily: {}, sprint: {} } });
 
   /* ================= 工具 ================= */
   function toast(msg, kind) {
@@ -64,6 +65,7 @@
     if (!b || !c) return [];
     return P.flatten({ courses: [c] });
   }
+  function sprintList() { const b = curBank(); return b ? P.flatten(b) : []; }
   function curChapters() {
     const b = curBank(), c = curCourse();
     if (!b || !c) return [];
@@ -190,9 +192,10 @@
 
   /** 把市场里的科目变成可练习的题库（内容按需拉取，不预加载 98 科） */
   async function openCatalogBank(id, opts) {
-    opts = Object.assign({ tab: 'practice', autostart: true }, opts || {});
+    opts = Object.assign({ tab: 'practice', autostart: true, skipPreview: false }, opts || {});
     const item = catalogItem(id);
     if (!item) { toast('题库不存在', 'bad'); return; }
+    if (!isUnlocked(item) && !opts.skipPreview) { openCatalogPreview(item); return; }
     const exist = S.banks.find(b => b.catalogId === id);
     track('bank_open', { bank: id, p: { kind: item.kind || 'free', locked: isUnlocked(item) ? 0 : 1 } });
     if (exist) { await enterBank(exist.id, opts); return; }
@@ -237,7 +240,7 @@
       S.banks.push(bank);
       saveCatalogBanks();
       await syncCatalogBookmark(bank);
-      await enterBank(bank.id, opts);
+      await enterBank(bank.id, Object.assign({}, opts, { freshCatalog: true }));
       return bank;
     } catch (e) {
       toast('载入失败：' + (e.message || '重试'), 'bad');
@@ -247,12 +250,27 @@
   }
 
   async function enterBank(bankId, opts) {
+    const bank = S.banks.find(b => b.id === bankId);
+    if (bank && bank.catalogId && !(opts && opts.freshCatalog)) await refreshCatalogContent(bank);
     await selectBank(bankId);
     S.tab = (opts && opts.tab) || 'practice';
     render();
     // 从题库页点「开始练」直接进答题，不用再点一次「开始练习」
     if (S.tab === 'practice' && opts && opts.autostart && !S.pq.length) startPractice();
     window.scrollTo({ top: 0 });
+  }
+
+  async function refreshCatalogContent(bank) {
+    try {
+      const row = await C.fetchCatalogBank(bank.catalogId);
+      if (!row || !Array.isArray(row.chapters)) return;
+      const item = catalogItem(bank.catalogId);
+      const made = P.makeBank({ title: item ? item.title + (item.org ? ' · ' + item.org : '') : bank.title,
+        subject: item && item.org || bank.subject || '', chapters: row.chapters,
+        source_kind: 'catalog', source_name: '内置题库' });
+      bank.courses = made.courses; bank.meta = made.meta;
+      bank.question_count = item && item.question_count || P.countQuestions(made);
+    } catch (e) { console.warn('题库更新检查失败，继续使用本机内容', e); }
   }
 
   function confirmUnlock(item) {
@@ -295,6 +313,35 @@
         }
       };
     });
+  }
+
+  function openCatalogPreview(item) {
+    track('bank_preview', { bank: item.id, p: { kind: item.kind || 'paid' } });
+    const price = item.price_cents || 100;
+    const preview = Q.catalogPreviews && Q.catalogPreviews[item.id];
+    const chapters = preview && Array.isArray(preview.chapters) ? preview.chapters : [];
+    const samples = preview && Array.isArray(preview.samples) ? preview.samples : [];
+    const chapterHtml = chapters.length
+      ? '<section class="preview-section"><h4>章节目录 <span>' + chapters.length + ' 章</span></h4>'
+        + '<ol class="preview-list">' + chapters.slice(0, 8).map(c => '<li>' + esc(c) + '</li>').join('') + '</ol>'
+        + (chapters.length > 8 ? '<details class="preview-more"><summary>查看剩余 ' + (chapters.length - 8) + ' 章</summary><ol class="preview-list" start="9">' + chapters.slice(8).map(c => '<li>' + esc(c) + '</li>').join('') + '</ol></details>' : '')
+        + '</section>'
+      : '<p class="small muted">这套题库的章节目录正在整理。</p>';
+    const sampleHtml = samples.length
+      ? '<section class="preview-section"><h4>实际题库样题 <span>' + samples.length + ' 道</span></h4>'
+        + samples.map((q, i) => '<div class="preview-sample"><div class="preview-sample-meta">样题 ' + (i + 1) + ' · ' + esc(q.chapter || '') + (q.type ? ' · ' + esc(q.type) : '') + '</div>'
+          + '<b>' + esc(q.stem || '') + '</b>'
+          + '<div class="preview-options">' + (Array.isArray(q.options) ? q.options.map(o => '<div><span>' + esc(o.k || '') + '.</span> ' + esc(o.v || '') + '</div>').join('') : '') + '</div>'
+          + '<p class="preview-answer">参考答案：' + esc(q.answer || '') + '</p></div>').join('')
+        + '<p class="tiny muted">样题和答案取自实际题库；原始资料未提供解析，请结合课程资料核对。</p></section>'
+      : '<p class="small muted">这套题库的样题正在整理。</p>';
+    openModal('<div class="modal-head"><h3>题库预览</h3><button class="x" data-close aria-label="关闭">×</button></div>'
+      + '<div class="modal-body"><h2 class="preview-title">' + esc(item.title) + '</h2>'
+      + '<p class="small muted">' + esc(item.org || '未标注学校或课程来源') + '</p>'
+      + '<div class="preview-facts"><span>' + Number(item.question_count || 0).toLocaleString('zh-CN') + ' 道题</span><span>' + Number(item.chapter_count || 0) + ' 章</span><span>¥' + yuan(price) + ' 永久解锁</span></div>'
+      + chapterHtml + sampleHtml + '</div>'
+      + '<div class="modal-foot"><button class="btn" data-close>再看看</button><button class="btn primary" id="previewUnlock">解锁 ¥' + yuan(price) + '</button></div>', true);
+    $('#previewUnlock').onclick = () => { closeModal(); openCatalogBank(item.id, { skipPreview: true }); };
   }
 
   async function selectBank(id) {
@@ -493,21 +540,35 @@
       bindActs(view); return;
     }
     const courses = bank.courses || [];
-    const courseChips = courses.length > 1
+    const courseChips = S.practiceMode === 'daily' && courses.length > 1
       ? '<div class="chips" style="margin-bottom:12px">' + courses.map(c =>
         '<button class="chip ' + (c.key === S.courseKey ? 'on' : '') + '" data-course="' + esc(c.key) + '">' + esc(c.short || c.course) + '</button>').join('') + '</div>'
       : '';
-    view.innerHTML = '<div class="page-heading"><h1>' + esc(bank.title) + '</h1><p>按章节练习，把每一题学得更明白。</p></div><details class="card practice-filters"' + ((!S.pq.length || window.matchMedia('(min-width:761px)').matches) ? ' open' : '') + '><summary>练习设置<span>章节 · 题型 · 顺序</span></summary><div class="filter-content">' + courseChips
+    const coverage = sprintCoverage();
+    const sprintPlan = studyState().sprint.__bank__;
+    const examDate = sprintPlan && sprintPlan.examDate || dateAfter(7);
+    const daysLeft = Math.max(1, Math.ceil((new Date(examDate + 'T12:00:00') - new Date(todayKey() + 'T12:00:00')) / 86400000) || 1);
+    const dailyTarget = Math.ceil((coverage.total - coverage.done) / daysLeft);
+    const dailyPlan = studyState().daily[S.courseKey || 'all'];
+    const dailyProgress = dailyPlan && Array.isArray(dailyPlan.answered) && Array.isArray(dailyPlan.ids)
+      && dailyPlan.answered.length < dailyPlan.ids.length ? dailyPlan.answered.length + '/' + dailyPlan.ids.length + ' 题 · 可续做' : '每轮最多 10 题';
+    view.innerHTML = '<div class="page-heading"><h1>' + esc(bank.title) + '</h1><p>选择适合你的节奏，完成后随时继续。</p></div>'
+      + '<div class="practice-modes" role="group" aria-label="练习模式">'
+      + '<button class="practice-mode' + (S.practiceMode === 'daily' ? ' on' : '') + '" data-practice-mode="daily" aria-pressed="' + (S.practiceMode === 'daily') + '"><strong>日积月累</strong><span>' + dailyProgress + '</span></button>'
+      + '<button class="practice-mode' + (S.practiceMode === 'sprint' ? ' on' : '') + '" data-practice-mode="sprint" aria-pressed="' + (S.practiceMode === 'sprint') + '"><strong>考前冲刺</strong><span>整套覆盖 ' + coverage.done + '/' + coverage.total + ' 题 · 可续做</span></button></div>'
+      + (S.practiceMode === 'sprint' ? '<div class="sprint-plan"><label for="examDate">目标考试日期</label><input id="examDate" type="date" min="' + todayKey() + '" value="' + esc(examDate) + '"><span>剩余 ' + daysLeft + ' 天，每天约 ' + dailyTarget + ' 题可覆盖整套</span></div>' : '')
+      + '<details class="card practice-filters"' + ((!S.pq.length || window.matchMedia('(min-width:761px)').matches) ? ' open' : '') + '><summary>练习设置<span>章节 · 题型 · 顺序</span></summary><div class="filter-content">' + courseChips
+      + (S.practiceMode === 'sprint' ? '<p class="small muted">冲刺模式会练完整套题库的全部题目，筛选条件只适用于日积月累。</p>' : '')
       + '<div class="filter-bar">'
-      + '<select id="fChapter"></select><select id="fSection"></select><select id="fType">'
+      + '<select id="fChapter"' + (S.practiceMode === 'sprint' ? ' disabled' : '') + '></select><select id="fSection"' + (S.practiceMode === 'sprint' ? ' disabled' : '') + '></select><select id="fType"' + (S.practiceMode === 'sprint' ? ' disabled' : '') + '>'
       + '<option value="">全部题型</option><option>单选题</option><option>多选题</option><option>判断题</option></select>'
       + '<select id="fOrder"><option value="seq">顺序</option><option value="rand">随机</option></select>'
-      + '<select id="fScope"><option value="all">全部题</option><option value="undone">未做过的</option><option value="wrong">做错的</option><option value="star">收藏的</option></select>'
+      + '<select id="fScope"' + (S.practiceMode === 'sprint' ? ' disabled' : '') + '><option value="all">全部题</option><option value="undone">未做过的</option><option value="wrong">做错的</option><option value="star">收藏的</option></select>'
       + '</div>'
       + '<div class="row" style="margin-top:10px">'
-      + '<input class="grow" id="fSearch" type="search" placeholder="搜索题干关键词（回车筛选）">'
-      + '<button class="btn primary" id="startBtn">开始练习</button>'
-      + '<button class="btn" id="resetFilter">重置</button></div>'
+      + '<input class="grow" id="fSearch" type="search" placeholder="搜索题干关键词（回车筛选）"' + (S.practiceMode === 'sprint' ? ' disabled' : '') + '>'
+      + '<button class="btn primary" id="startBtn">' + (S.practiceMode === 'sprint' ? '开始／继续整套练习' : '开始／继续一轮') + '</button>'
+      + '<button class="btn" id="resetFilter"' + (S.practiceMode === 'sprint' ? ' disabled' : '') + '>重置</button></div>'
       + '<div class="small muted" id="filterInfo" style="margin-top:8px"></div></div></details>'
       + '<p class="small muted" id="syncStatus" role="status" tabindex="0">' + (C.session ? '检查同步状态…' : '未登录 · 仅保存在本机') + '</p>'
       + '<div id="practiceBody" class="hide"></div>';
@@ -528,10 +589,23 @@
     };
     $('#syncStatus').onclick = retryProgress;
     $('#startBtn').onclick = startPractice;
+    if ($('#examDate')) $('#examDate').onchange = e => {
+      const plan = studyState().sprint.__bank__ || { answered: [], startedAt: Date.now() };
+      plan.examDate = e.target.value || dateAfter(7);
+      studyState().sprint.__bank__ = plan; saveProgressSoon(); renderPractice();
+    };
+    $$('[data-practice-mode]', view).forEach(el => { el.onclick = () => {
+      if (S.practiceMode === el.dataset.practiceMode) return;
+      closeSession(); S.pq = []; S.practiceMode = el.dataset.practiceMode; renderPractice();
+    }; });
     $$('[data-course]', view).forEach(el => {
-      el.onclick = () => { S.courseKey = el.dataset.course; S.filter = { main: '', sec: '', type: '', order: 'seq', scope: 'all', kw: '' }; renderPractice(); };
+      el.onclick = () => { closeSession(); S.pq = []; S.courseKey = el.dataset.course; S.filter = { main: '', sec: '', type: '', order: 'seq', scope: 'all', kw: '' }; renderPractice(); };
     });
-    if (S.pq.length) renderPracticeQuestion();
+    if (S.pq.length) {
+      const answered = modePlan() && modePlan().answered || [];
+      while (S.pi < S.pq.length && answered.includes(S.pq[S.pi].id)) S.pi++;
+      renderPracticeQuestion();
+    }
     bindActs(view);
   }
 
@@ -572,25 +646,60 @@
     if (f.scope === 'star') list = list.filter(q => S.db.star.indexOf(q.id) >= 0);
     return list;
   }
+  function studyState() {
+    if (!S.db.study || typeof S.db.study !== 'object') S.db.study = {};
+    if (!S.db.study.daily || typeof S.db.study.daily !== 'object') S.db.study.daily = {};
+    if (!S.db.study.sprint || typeof S.db.study.sprint !== 'object') S.db.study.sprint = {};
+    return S.db.study;
+  }
+  function studyKey() { return S.practiceMode === 'sprint' ? '__bank__' : (S.courseKey || 'all'); }
+  function modePlan() { return studyState()[S.practiceMode][studyKey()] || null; }
+  function setModePlan(plan) { studyState()[S.practiceMode][studyKey()] = plan; saveProgressSoon(); }
+  function sprintCoverage() {
+    const plan = studyState().sprint.__bank__;
+    const ids = new Set(sprintList().map(q => q.id));
+    return { done: plan && Array.isArray(plan.answered) ? plan.answered.filter(id => ids.has(id)).length : 0, total: ids.size };
+  }
   function updateFilterInfo() {
     const info = $('#filterInfo');
     if (!info) return;
     const list = currentList();
-    info.textContent = '当前筛选：' + list.length + ' 题' + (list.length ? '，点「开始练习」进入答题。' : '，请调整筛选条件。');
+    info.textContent = S.practiceMode === 'sprint'
+      ? '本题库共 ' + sprintList().length + ' 题，可分多次完成，全部题目至少作答一次算一轮。'
+      : '当前筛选：' + list.length + ' 题' + (list.length ? '，每轮最多 10 题。' : '，请调整筛选条件。');
   }
   function startPractice() {
-    const list = currentList();
+    const list = S.practiceMode === 'sprint' ? sprintList() : currentList();
     if (!list.length) { toast('当前筛选没有题目，换个条件试试'); return; }
     closeSession();
-    S.pq = S.filter.order === 'rand' ? shuffle(list) : list;
-    const resume = S.filter.order === 'seq' && S.filter.scope === 'all' && !S.filter.main && !S.filter.sec && !S.filter.type && !S.filter.kw
-      ? S.pq.findIndex(q => q.id === S.db.cursor && !S.db.rec[q.id]?.done) : -1;
-    S.pi = resume >= 0 ? resume : 0; S.pStat = { right: 0, done: 0 };
+    let plan = modePlan();
+    const byId = new Map(list.map(q => [q.id, q]));
+    if (S.practiceMode === 'daily') {
+      const pending = plan && Array.isArray(plan.ids) && Array.isArray(plan.answered)
+        && plan.ids.length && plan.answered.length < plan.ids.length && plan.ids.every(id => byId.has(id));
+      if (!pending) {
+        const fresh = list.filter(q => !S.db.rec[q.id]?.done);
+        const old = list.filter(q => S.db.rec[q.id]?.done);
+        const ordered = S.filter.order === 'rand' ? shuffle(fresh).concat(shuffle(old)) : fresh.concat(old);
+        plan = { ids: ordered.slice(0, 10).map(q => q.id), answered: [], startedAt: Date.now() };
+        setModePlan(plan);
+      }
+      S.pq = plan.ids.filter(id => !plan.answered.includes(id)).map(id => byId.get(id)).filter(Boolean);
+    } else {
+      const valid = plan && Array.isArray(plan.answered) && plan.answered.every(id => byId.has(id));
+      if (!valid || plan.completedAt || plan.answered.length >= list.length) {
+        plan = { answered: [], startedAt: Date.now(), examDate: plan && plan.examDate || dateAfter(7) };
+        setModePlan(plan);
+      }
+      S.pq = (S.filter.order === 'rand' ? shuffle(list) : list).filter(q => !plan.answered.includes(q.id));
+    }
+    S.pi = 0;
+    S.pStat = { right: 0, done: 0 };
     S.sid = newSessionId();
     S.bankTagAtStart = bankTag();
     S.pFinished = false;
     track('practice_start', { bank: S.bankTagAtStart, sid: S.sid,
-      p: { count: S.pq.length, order: S.filter.order, scope: S.filter.scope, type: S.filter.type || 'all' } });
+      p: { mode: S.practiceMode, count: S.pq.length, order: S.filter.order, scope: S.filter.scope, type: S.filter.type || 'all' } });
     const filters = $('.practice-filters');
     if (filters && window.matchMedia('(max-width:760px)').matches) filters.open = false;
     renderPracticeQuestion();
@@ -601,15 +710,25 @@
     return a;
   }
   function recOf(id) { return S.db.rec[id] || { done: 0, right: 0, wrong: 0 }; }
-  function markDone(q, ok) {
-    const r = recOf(q.id);
-    r.done++; ok ? r.right++ : r.wrong++;
-    S.db.rec[q.id] = r;
-    const w = S.db.wrong;
-    if (!ok && w.indexOf(q.id) < 0) w.push(q.id);
-    if (ok && w.indexOf(q.id) >= 0) w.splice(w.indexOf(q.id), 1);
-    S.db.daily[todayKey()] = (S.db.daily[todayKey()] || 0) + 1;
+  function markDone(q, ok, countForPlan = true) {
+    if (countForPlan) {
+      const r = recOf(q.id);
+      r.done++; ok ? r.right++ : r.wrong++;
+      S.db.rec[q.id] = r;
+      const w = S.db.wrong;
+      if (!ok && w.indexOf(q.id) < 0) w.push(q.id);
+      if (ok && w.indexOf(q.id) >= 0) w.splice(w.indexOf(q.id), 1);
+      S.db.daily[todayKey()] = (S.db.daily[todayKey()] || 0) + 1;
+    }
     S.db.cursor = S.pq[S.pi + 1] ? S.pq[S.pi + 1].id : null;
+    const plan = modePlan();
+    if (countForPlan && plan && Array.isArray(plan.answered) && !plan.answered.includes(q.id)) plan.answered.push(q.id);
+    const goal = S.practiceMode === 'daily' ? plan && plan.ids && plan.ids.length : sprintList().length;
+    if (plan && !plan.completedAt && goal && plan.answered.length >= goal) {
+      plan.completedAt = Date.now(); S.pFinished = true;
+      track('practice_finish', { bank: S.bankTagAtStart, sid: S.sid, ok: true,
+        p: { mode: S.practiceMode, total: goal, answered: plan.answered.length, right: S.pStat.right } });
+    }
     saveProgressSoon();
   }
   function isStar(id) { return S.db.star.indexOf(id) >= 0; }
@@ -634,6 +753,11 @@
     if (S.pi >= S.pq.length) { renderPracticeEnd(body); return; }
     const q = S.pq[S.pi];
     const r = recOf(q.id);
+    const course = S.practiceMode === 'sprint' && (curBank().courses || []).length > 1
+      ? curBank().courses.find(c => c.key === q.courseKey) : null;
+    const plan = modePlan();
+    const total = S.practiceMode === 'daily' ? (plan && plan.ids ? plan.ids.length : S.pq.length) : sprintList().length;
+    const completed = plan && Array.isArray(plan.answered) ? plan.answered.length : 0;
     S.pAnswered = false; S.pSelected = [];
     S.qAt = Date.now();
     let optsHtml = '';
@@ -644,13 +768,15 @@
     }
     body.innerHTML = '<div class="card">'
       + '<div class="card-head"><div class="row">'
-      + '<span class="q-no">第 ' + (S.pi + 1) + ' / ' + S.pq.length + ' 题</span>'
-      + '<span class="tag gray">' + esc(q.type) + '</span><span class="tag">' + esc(q.secName) + ' ' + esc(q.sec) + '</span>'
+      + '<span class="q-no">' + (S.practiceMode === 'daily' ? '日积月累' : '考前冲刺') + ' · 已完成 ' + completed + ' / ' + total + ' 题</span>'
+      + '<span class="tag gray">' + esc(q.type) + '</span>'
+      + (course ? '<span class="tag">' + esc(course.short || course.course) + '</span>' : '')
+      + '<span class="tag">' + esc(q.secName) + ' ' + esc(q.sec) + '</span>'
       + (r.done ? '<span class="small muted">已答 ' + r.done + ' 次 · 对 ' + r.right + '</span>' : '')
       + '</div><div class="row">'
       + '<button class="star ' + (isStar(q.id) ? 'on' : '') + '" id="starBtn" title="收藏（S）">★</button>'
       + '<span class="kbd-hint">正确率 ' + pct(S.pStat.right, S.pStat.done) + '</span></div></div>'
-      + '<div class="progress"><i style="width:' + (S.pi / S.pq.length * 100) + '%"></i></div>'
+      + '<div class="progress"><i style="width:' + (total ? completed / total * 100 : 0) + '%"></i></div>'
       + '<div class="q-stem">' + esc(q.stem) + '</div>'
       + (q.note ? '<div class="note"> ' + esc(q.note) + '</div>' : '')
       + '<div class="opts" id="optBox">' + optsHtml + '</div>'
@@ -659,7 +785,7 @@
       + '<button class="btn" id="prevBtn"' + (S.pi === 0 ? ' disabled' : '') + '>上一题</button>'
       + '<button class="btn primary" id="nextBtn">下一题</button>'
       + (q.type === '多选题' ? '<button class="btn" id="submitBtn" disabled>提交答案</button>' : '')
-      + '<button class="btn" id="showBtn">看答案</button><button class="btn ghost" id="reportBtn">题目报错</button>'
+      + '<button class="btn" id="showBtn">看答案</button><button class="btn ghost" id="reportBtn">题目纠错</button>'
       + '<span class="kbd-hint grow" style="text-align:right">A/B/C/D 选择 · 多选按 Enter 提交 · S 收藏</span></div></div>';
 
     $$('#optBox .opt').forEach(btn => {
@@ -684,17 +810,126 @@
     if ($('#submitBtn')) $('#submitBtn').onclick = () => { if (!S.pAnswered) answerPractice(S.pSelected); };
   }
 
+  function prepareReportImage(file) {
+    if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return Promise.reject(new Error('请上传 PNG、JPG 或 WebP 截图'));
+    if (file.size > 8 * 1024 * 1024) return Promise.reject(new Error('截图不能超过 8 MB'));
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        if (img.width > 10000 || img.height > 10000) { reject(new Error('图片尺寸过大，请裁剪后上传')); return; }
+        const scale = Math.min(1, 1800 / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => {
+          if (!blob) { reject(new Error('截图处理失败')); return; }
+          const reader = new FileReader();
+          reader.onload = () => resolve({ blob, dataUrl: reader.result });
+          reader.onerror = () => reject(new Error('截图读取失败'));
+          reader.readAsDataURL(blob);
+        }, 'image/jpeg', 0.82);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('无法读取截图')); };
+      img.src = url;
+    });
+  }
+
   async function reportQuestion(q) {
     if (!C.session) { openAuth('login', '登录后可以反馈题目错误'); return; }
-    const reason = prompt('请写明问题：答案错误、题干/选项错误、重复题、缺少解析等（至少 5 个字）');
-    if (reason === null) return;
-    if (reason.trim().length < 5 || reason.length > 500) { toast('请填写 5–500 字的问题说明', 'bad'); return; }
     const bank = curBank();
-    try {
-      await C.reportQuestion({ catalog_id: bank.catalogId || null, bank_id: bank.cloudId || null,
-        question_id: q.id, stem: q.stem, answer: q.answer, reason: reason.trim() });
-      toast('已提交，核对后会修正', 'ok');
-    } catch (e) { toast('提交失败：' + (e.message || '请稍后重试'), 'bad'); }
+    const state = { blob: null, dataUrl: null, ai: null, busy: false, aiUsed: false };
+    openModal('<div class="modal-head"><h3>题目纠错</h3><button class="x" data-close aria-label="关闭">×</button></div>'
+      + '<div class="modal-body"><div class="report-current"><span class="tiny muted">当前题目</span><p>' + esc(q.stem) + '</p><span class="small muted">当前答案：' + esc(q.answer || '未录入') + '</span></div>'
+      + '<label class="field"><span>问题类型</span><select id="reportType"><option value="answer">答案错误</option><option value="stem">题干或选项错误</option><option value="missing">缺少答案或解析</option><option value="duplicate">重复题</option><option value="other">其他</option></select></label>'
+      + '<label class="field"><span>建议答案（可选）</span><input id="reportAnswer" maxlength="8" placeholder="例如 A、AC、√"></label>'
+      + '<label class="field"><span>建议的题干或选项文字（可选）</span><textarea id="reportText" rows="3" maxlength="2000" placeholder="把正确版本粘贴在这里"></textarea></label>'
+      + '<label class="field"><span>补充说明（可选）</span><textarea id="reportReason" rows="2" maxlength="500" placeholder="说明哪里有误、截图来自哪一页"></textarea></label>'
+      + '<label class="field"><span>学习通截图（可选）</span><input id="reportImage" type="file" accept="image/png,image/jpeg,image/webp"></label>'
+      + '<p class="tiny muted">请先裁剪或遮住姓名、学号等个人信息。点「AI 识别截图」会把图片发送给 AI 服务；提交后截图供审核者核对。</p>'
+      + '<div id="reportImageBox" class="report-image-box hide"><img id="reportImageView" alt="待提交的截图"><button class="btn sm" id="reportRemoveImage">移除截图</button></div>'
+      + '<button class="btn" id="reportAiBtn" disabled>AI 识别截图</button><div id="reportAiResult" class="report-ai-result" role="status"></div>'
+      + '</div><div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn primary" id="reportSubmit">提交纠错</button></div>', true);
+    const fileInput = $('#reportImage'), aiBtn = $('#reportAiBtn'), imageBox = $('#reportImageBox');
+    fileInput.onchange = async () => {
+      state.blob = null; state.dataUrl = null; state.ai = null; state.aiUsed = false;
+      imageBox.classList.add('hide'); aiBtn.disabled = true; $('#reportAiResult').textContent = '';
+      if (!fileInput.files[0]) return;
+      try {
+        const prepared = await prepareReportImage(fileInput.files[0]);
+        if (!$('#reportImageView')) return;
+        state.blob = prepared.blob; state.dataUrl = prepared.dataUrl;
+        $('#reportImageView').src = prepared.dataUrl;
+        imageBox.classList.remove('hide'); aiBtn.disabled = false;
+      } catch (e) { fileInput.value = ''; toast(e.message || '截图处理失败', 'bad'); }
+    };
+    $('#reportRemoveImage').onclick = () => {
+      state.blob = null; state.dataUrl = null; state.ai = null; state.aiUsed = false;
+      fileInput.value = ''; imageBox.classList.add('hide'); aiBtn.disabled = true; $('#reportAiResult').textContent = '';
+    };
+    aiBtn.onclick = async () => {
+      if (!state.dataUrl || state.busy || state.aiUsed) return;
+      state.busy = true; aiBtn.disabled = true; aiBtn.textContent = '正在识别…';
+      try {
+        const result = await AI.recognizeCorrectionScreenshot(state.dataUrl, q);
+        if (!$('#reportAiResult')) return;
+        state.ai = result; state.aiUsed = true;
+        const recognizedText = [result.visible_stem].concat((result.visible_options || []).map(o => o.k + '. ' + o.v)).filter(Boolean).join('\n');
+        $('#reportAiResult').innerHTML = '<div class="report-ai-card"><b>' + (result.matched ? '识别完成，请核对' : '截图可能不是这道题') + '</b>'
+          + (result.visible_stem ? '<p>识别题干：' + esc(result.visible_stem) + '</p>' : '')
+          + (result.visible_options && result.visible_options.length ? '<p>识别选项：' + result.visible_options.map(o => esc(o.k + '. ' + o.v)).join('；') + '</p>' : '')
+          + (result.answer_visible && result.visible_answer ? '<p>截图标出的答案：' + esc(result.visible_answer) + '</p>' : '<p>截图中没有明确的标准答案，AI 未推测。</p>')
+          + (result.uncertainty ? '<p>需留意：' + esc(result.uncertainty) + '</p>' : '')
+          + (result.matched && recognizedText ? '<button class="btn sm" id="reportUseAiText">填入识别文字</button>' : '')
+          + (result.matched && result.answer_visible && result.visible_answer ? '<button class="btn sm" id="reportUseAiAnswer">填入建议答案</button>' : '') + '</div>';
+        if ($('#reportUseAiText')) $('#reportUseAiText').onclick = () => { $('#reportText').value = recognizedText; };
+        if ($('#reportUseAiAnswer')) $('#reportUseAiAnswer').onclick = () => { $('#reportAnswer').value = result.visible_answer; };
+      } catch (e) { toast('AI 识别失败：' + (e.message || '请手动填写'), 'bad'); }
+      finally { state.busy = false; if (aiBtn.isConnected) { aiBtn.disabled = state.aiUsed || !state.dataUrl; aiBtn.textContent = 'AI 识别截图'; } }
+    };
+    $('#reportSubmit').onclick = async () => {
+      if (state.busy) return;
+      const issue = $('#reportType').value;
+      const suggestedAnswer = $('#reportAnswer').value.trim().toUpperCase().replace(/[\s,，、;；]/g, '');
+      const suggestedText = $('#reportText').value.trim();
+      const note = $('#reportReason').value.trim();
+      const allowed = q.type === '判断题' ? ['√', 'X'] : (q.options || []).map(o => String(o.k).toUpperCase());
+      if (suggestedAnswer && (!suggestedAnswer.split('').every(k => allowed.includes(k)) || new Set(suggestedAnswer).size !== suggestedAnswer.length)) {
+        toast('建议答案请填写当前题目的选项字母', 'bad'); return;
+      }
+      if (issue === 'answer' && !suggestedAnswer && !state.blob) { toast('请填写建议答案，或上传能说明答案的截图', 'bad'); return; }
+      if (!suggestedAnswer && !suggestedText && !state.blob && note.length < 5) { toast('请填写建议内容、上传截图，或说明问题', 'bad'); return; }
+      if (state.ai && !state.ai.matched && !confirm('AI 认为截图可能不是这道题。仍要提交给人工核对吗？')) return;
+      const reason = (note.length >= 5 ? note : '用户反馈' + ({ answer: '答案错误', stem: '题干或选项错误', missing: '缺少答案或解析', duplicate: '重复题', other: '题目问题' }[issue]) + (note ? '：' + note : '')).slice(0, 500);
+      const btn = $('#reportSubmit'); btn.disabled = true; btn.textContent = '提交中…';
+      let evidencePath = null;
+      try {
+        if (state.blob) evidencePath = await C.uploadReportImage(state.blob);
+        const baseReport = { catalog_id: bank.catalogId || null, bank_id: bank.cloudId || null,
+          question_id: q.id, stem: q.stem, answer: q.answer, reason };
+        const details = { issue_type: issue, suggested_answer: suggestedAnswer || null,
+          suggested_text: suggestedText || null, evidence_path: evidencePath, ai_extract: state.ai };
+        try {
+          await C.reportQuestion(Object.assign({}, baseReport, details, {
+            question_snapshot: { type: q.type, options: q.options, section: q.sec, course: q.courseKey }
+          }));
+        } catch (e) {
+          if (!/column|schema cache|does not exist/i.test(e.message || '')) throw e;
+          await C.reportQuestion(Object.assign({}, baseReport, {
+            reason: (reason + (suggestedAnswer ? '；建议答案：' + suggestedAnswer : '') + (suggestedText ? '；建议文字：' + suggestedText : '')).slice(0, 500),
+            evidence: JSON.stringify(details)
+          }));
+        }
+        closeModal(); toast('纠错已提交，审核后会修正共享题库', 'ok');
+      } catch (e) {
+        if (evidencePath) { try { await C.removeReportImage(evidencePath); } catch (ignore) {} }
+        const message = /column|schema cache|does not exist/i.test(e.message || '')
+          ? '纠错服务尚未升级，请稍后再试' : '提交失败：' + (e.message || '请稍后再试');
+        toast(message, 'bad');
+      } finally { if (btn.isConnected) { btn.disabled = false; btn.textContent = '提交纠错'; } }
+    };
   }
 
   function reviewOptions(q, sel, answer) {
@@ -740,7 +975,7 @@
     $('#fb').innerHTML = '<div class="fb bad"><b>答案：' + esc(q.answer || '未录入') + '</b>' + (q.type !== '判断题' && q.answer ? '　' + esc(ansText(q)) : '') + '</div>';
     track('reveal', { sid: S.sid, ok: false, ms: Date.now() - (S.qAt || Date.now()),
       p: { t: q.type, i: S.pi + 1 } });
-    markDone(q, false);
+    markDone(q, false, false);
   }
 
   function nextPractice() {
@@ -749,29 +984,38 @@
   }
 
   function renderPracticeEnd(body) {
-    const total = S.pq.length;
+    const plan = modePlan();
+    const total = S.practiceMode === 'daily' ? (plan && plan.ids ? plan.ids.length : S.pq.length) : sprintList().length;
+    if (plan && plan.answered.length < total) {
+      body.innerHTML = '<div class="card"><div class="empty"><h3>还有 ' + (total - plan.answered.length) + ' 题未作答</h3>'
+        + '<p>看答案的题不计入整轮覆盖，继续作答后才算完成。</p>'
+        + '<button class="btn primary" id="continueUnanswered">继续未答题</button></div></div>';
+      $('#continueUnanswered').onclick = startPractice;
+      return;
+    }
     const acc = pct(S.pStat.right, S.pStat.done);
     // 同一轮可能被重复渲染（切标签页回来），完成事件只报一次
     if (!S.pFinished) {
       S.pFinished = true;
+      if (plan) { plan.completedAt = Date.now(); saveProgressSoon(); }
       track('practice_finish', { bank: S.bankTagAtStart, sid: S.sid, ok: true,
-        p: { total: total, answered: S.pStat.done, right: S.pStat.right } });
+        p: { mode: S.practiceMode, total: total, answered: plan && plan.answered ? plan.answered.length : S.pStat.done, right: S.pStat.right } });
     }
     body.innerHTML = '<div class="card"><div class="empty">'
       + '<div class="ico">' + (acc >= 80 ? '' : acc >= 60 ? '' : '') + '</div>'
-      + '<h3>这一轮做完了</h3>'
-      + '<p>共 ' + total + ' 题，答对 ' + S.pStat.right + ' 道，正确率 ' + acc + '%。' + (acc < 60 ? '错题已经收进错题本，过一遍再练。' : '') + '</p>'
+      + '<h3>' + (S.practiceMode === 'daily' ? '这轮 ' + total + ' 题完成了' : '整套题库覆盖完成') + '</h3>'
+      + '<p>本次答了 ' + S.pStat.done + ' 题，答对 ' + S.pStat.right + ' 道，正确率 ' + acc + '%。' + (acc < 60 ? '错题已经收进错题本，过一遍再练。' : '') + '</p>'
       + '<div class="stat-grid" style="max-width:520px;margin:0 auto 16px">'
       + '<div class="stat"><b>' + total + '</b><span>本轮题量</span></div>'
       + '<div class="stat"><b>' + S.pStat.right + '</b><span>答对</span></div>'
       + '<div class="stat"><b>' + acc + '%</b><span>正确率</span></div>'
       + '</div>'
       + '<div class="row" style="justify-content:center">'
-      + '<button class="btn primary" id="againBtn">再来一轮</button>'
+      + '<button class="btn primary" id="againBtn">' + (S.practiceMode === 'daily' ? '再练一轮' : '开始新一轮整套练习') + '</button>'
       + '<button class="btn" id="wrongBtn">只看错题</button>'
       + '<button class="btn ghost" id="backFilter">改筛选条件</button></div></div></div>';
     $('#againBtn').onclick = () => startPractice();
-    $('#wrongBtn').onclick = () => { S.filter.scope = 'wrong'; if (!currentList().length) { toast('还没有错题'); return; } startPractice(); };
+    $('#wrongBtn').onclick = () => { S.practiceMode = 'daily'; S.filter.scope = 'wrong'; if (!currentList().length) { toast('还没有错题'); return; } S.pq = []; renderPractice(); startPractice(); };
     $('#backFilter').onclick = () => { S.pq = []; renderPractice(); };
   }
 
@@ -1205,8 +1449,8 @@
       + '<h4>' + esc(it.title) + '</h4>'
       + '<div class="mk-org">' + (it.org ? esc(it.org) : '&nbsp;') + '</div>'
       + '<div class="mk-card-foot"><span class="mk-count">' + Number(it.question_count || 0).toLocaleString('zh-CN') + '<small>题</small></span>'
-      + '<button class="btn sm ' + 'catalog-action' + '" data-open="' + esc(it.id) + '" aria-label="' + esc((unlocked ? '开始练习：' : '解锁题库：') + it.title) + '">'
-      + (unlocked ? '开始练习' : '¥' + yuan(price) + ' 解锁') + '<span aria-hidden="true">↗</span></button></div>'
+      + '<button class="btn sm catalog-action" data-open="' + esc(it.id) + '" aria-label="' + esc((unlocked ? '开始练习：' : '预览题库：') + it.title) + '">'
+      + (unlocked ? '开始练习' : '查看题库') + '<span aria-hidden="true">↗</span></button></div>'
       + '</div>';
   }
 
@@ -1600,6 +1844,8 @@
     await mergeBanks();
     await loadCatalog();
     await restoreCatalogBanks();
+    const selectedBank = curBank();
+    if (selectedBank && selectedBank.catalogId) await refreshCatalogContent(selectedBank);
     await loadProgressFor(curBank());
     await loadNotesFor(curBank());
     refreshBankSelect();
@@ -1962,7 +2208,7 @@
       }
     });
     // 关页面/切走时把没发出去的事件补发一次
-    window.addEventListener('pagehide', flushTrack);
+    window.addEventListener('pagehide', () => { closeSession(); flushTrack(); });
 
     C.on('login', async () => { track('auth_success', { p: { users: 1 } }); await mergeBanks(); await loadCatalog(); await restoreCatalogBanks(); if (S.bankId) await selectBank(S.bankId); retryProgress(); render(); });
     C.on('auth', () => { refreshBankSelect(); });
@@ -2080,7 +2326,7 @@
   function closeSession() {
     if (!S.sid || S.pFinished) { S.sid = null; return; }
     track('practice_end', { bank: S.bankTagAtStart || bankTag(), sid: S.sid, ok: false,
-      p: { answered: S.pStat ? S.pStat.done : 0, total: S.pq.length } });
+      p: { mode: S.practiceMode, answered: S.pStat ? S.pStat.done : 0, total: S.pq.length } });
     S.sid = null;
   }
 
