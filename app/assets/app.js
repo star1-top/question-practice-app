@@ -1078,15 +1078,23 @@
 
   /* ================= 题库管理 ================= */
   /* ================= 题库市场（首页） ================= */
-  function marketList() {
+  function marketMatches(title, org) {
     const q = S.marketQ.trim().toLowerCase();
+    return !q || ((title || '') + ' ' + (org || '')).toLowerCase().includes(q);
+  }
+
+  function marketList() {
     return S.catalog.filter(it => {
       if (S.marketOnly === 'free' && it.kind !== 'free') return false;
       if (S.marketOnly === 'paid' && it.kind !== 'paid') return false;
       if (S.marketOnly === 'mine') return false;
-      if (!q) return true;
-      return (it.title + ' ' + (it.org || '')).toLowerCase().indexOf(q) >= 0;
+      return marketMatches(it.title, it.org);
     });
+  }
+
+  function marketMineList() {
+    return S.banks.filter(b => (b.local || b.cloudId || b.catalogId)
+      && marketMatches(b.title, b.subject || b.org));
   }
 
   function renderMarket() {
@@ -1096,7 +1104,7 @@
     const freeN = S.catalog.filter(x => x.kind === 'free').length;
     const paidN = total - freeN;
     const qTotal = S.catalog.reduce((a, b) => a + (b.question_count || 0), 0);
-    const mine = S.banks.filter(b => b.local || b.cloudId || b.catalogId);
+    const mine = marketMineList();
 
     const chips = [
       ['all', '全部'], ['free', '免费 · ' + freeN], ['paid', '付费 · ' + paidN], ['mine', '我的 · ' + mine.length]
@@ -1147,27 +1155,27 @@
 
     const search = $('#mkSearch');
     if (search) {
-      let t = null;
-      search.oninput = e => {
-        clearTimeout(t);
-        if (e.isComposing || S.marketOnly === 'mine') return;
-        t = setTimeout(() => {
-          if (document.activeElement !== search) return;
-          S.marketQ = search.value;
-          const list = $('#marketResults');
-          const heading = $('#marketHeading');
-          if (list && heading) {
-            const items = marketList();
-            heading.textContent = items.length + ' 套题库';
-            list.innerHTML = items.length ? '<div class="mk-grid">' + items.map(it => marketCard(it)).join('') + '</div>'
-              : '<div class="empty"><h3>没找到「' + esc(S.marketQ) + '」</h3><p>' + contactLine('这套题库') + '</p></div>';
-            bindActs(list);
-            $$('[data-open]', list).forEach(b => b.onclick = () => openCatalogBank(b.dataset.open));
-          }
-        }, 200);
+      const updateResults = () => {
+        S.marketQ = search.value;
+        const list = $('#marketResults');
+        const heading = $('#marketHeading');
+        if (!list || !heading) return;
+        const mineScope = S.marketOnly === 'mine';
+        const items = mineScope ? marketMineList() : marketList();
+        heading.textContent = items.length + ' 套题库';
+        list.innerHTML = items.length
+          ? '<div class="mk-grid">' + items.map(it => mineScope ? mineCard(it) : marketCard(it)).join('') + '</div>'
+          : '<div class="empty"><h3>没找到「' + esc(S.marketQ) + '」</h3><p>'
+            + (mineScope ? '试试其他关键词，或导入自己的题库。' : contactLine('这套题库')) + '</p></div>';
+        bindActs(list);
+        $$('[data-open]', list).forEach(b => b.onclick = () => openCatalogBank(b.dataset.open));
+        $$('[data-open-mine]', list).forEach(b => b.onclick = () => enterBank(b.dataset.openMine, { tab: 'practice', autostart: true }));
+        bindBankDelete(list);
       };
-      search.oncompositionstart = () => clearTimeout(t);
-      search.oncompositionend = () => search.dispatchEvent(new Event('input', { bubbles: true }));
+      let composing = false;
+      search.oninput = e => { if (!composing && !e.isComposing) updateResults(); };
+      search.oncompositionstart = () => { composing = true; };
+      search.oncompositionend = () => { composing = false; updateResults(); };
     }
     $$('[data-only]').forEach(b => b.onclick = () => { S.marketOnly = b.dataset.only; renderMarket(); });
     bindActs(view);
