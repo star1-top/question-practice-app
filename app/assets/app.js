@@ -1078,9 +1078,16 @@
 
   /* ================= 题库管理 ================= */
   /* ================= 题库市场（首页） ================= */
+  function normalizeMarketText(value) {
+    return String(value || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  }
+
   function marketMatches(title, org) {
-    const q = S.marketQ.trim().toLowerCase();
-    return !q || ((title || '') + ' ' + (org || '')).toLowerCase().includes(q);
+    const terms = String(S.marketQ || '').normalize('NFKC').trim().split(/[\s,，、;；]+/)
+      .map(normalizeMarketText).filter(Boolean);
+    if (!terms.length) return true;
+    const searchable = normalizeMarketText(title) + normalizeMarketText(org);
+    return terms.every(term => searchable.includes(term));
   }
 
   function marketList() {
@@ -1172,10 +1179,8 @@
         $$('[data-open-mine]', list).forEach(b => b.onclick = () => enterBank(b.dataset.openMine, { tab: 'practice', autostart: true }));
         bindBankDelete(list);
       };
-      let composing = false;
-      search.oninput = e => { if (!composing && !e.isComposing) updateResults(); };
-      search.oncompositionstart = () => { composing = true; };
-      search.oncompositionend = () => { composing = false; updateResults(); };
+      ['input', 'compositionend', 'search', 'change'].forEach(event =>
+        search.addEventListener(event, updateResults));
     }
     $$('[data-only]').forEach(b => b.onclick = () => { S.marketOnly = b.dataset.only; renderMarket(); });
     bindActs(view);
