@@ -10,6 +10,7 @@
 *~
 .vscode/
 .idea/
+.taste-skill/
 
 # Local secrets and environment files
 .env

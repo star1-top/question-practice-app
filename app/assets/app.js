@@ -1450,7 +1450,7 @@
       + '<div class="mk-org">' + (it.org ? esc(it.org) : '&nbsp;') + '</div>'
       + '<div class="mk-card-foot"><span class="mk-count">' + Number(it.question_count || 0).toLocaleString('zh-CN') + '<small>题</small></span>'
       + '<button class="btn sm catalog-action" data-open="' + esc(it.id) + '" aria-label="' + esc((unlocked ? '开始练习：' : '预览题库：') + it.title) + '">'
-      + (unlocked ? '开始练习' : '查看题库') + '<span aria-hidden="true">↗</span></button></div>'
+      + (unlocked ? '开始练习' : '预览题库') + '<span aria-hidden="true">↗</span></button></div>'
       + '</div>';
   }
 

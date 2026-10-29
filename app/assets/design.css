@@ -276,3 +276,87 @@ body{font-variant-numeric:tabular-nums}
 .redeem-contact b{font-weight:500}
 .redeem-contact>span{color:var(--muted)}
 #redeemResult{margin-top:12px;font-size:13px;line-height:1.8;overflow-wrap:anywhere}
+
+/* Course index: quiet chrome, clear search, compact course records. */
+:root{--bg:#f2f4f7}
+html[data-theme=dark]{--bg:#14171b}
+main{padding-top:32px}
+.workspace-bar{display:none}
+nav.tabs{margin-top:22px}
+.nav-section-label{padding:0 12px 8px;color:var(--muted);font-size:11px;line-height:1.5;letter-spacing:.07em}
+.nav-section-secondary{padding-top:22px;padding-bottom:8px}
+nav.tabs button:nth-of-type(8){margin-top:0}
+.mk-hero{margin-bottom:24px}
+.mk-hero h1{font-size:30px;line-height:1.25;letter-spacing:-.04em;margin-bottom:8px}
+.mk-hero p{font-size:14px;line-height:1.65}
+.mk-summary{margin-bottom:26px;padding:16px 0}
+.mk-summary-item b{font-size:29px;letter-spacing:-.04em;line-height:1.2}
+.mk-summary-item span{font-size:13px}
+.mk-toolbar{margin-bottom:26px;gap:12px}
+.mk-toolbar .chips{order:2;margin-left:auto;margin-right:0}
+.search-field{order:1;flex:0 1 380px}
+input.mk-search{min-height:44px;font-size:14px;padding-left:40px}
+.search-field svg{width:18px;height:18px;left:14px}
+.catalog-heading{margin-bottom:14px}
+.catalog-heading h2{font-size:16px}
+.catalog-heading span{font-size:13px}
+.mk-grid{align-items:stretch}
+.mk-card,.mk-card.locked{padding:18px 20px 14px;min-height:198px}
+.mk-card:hover,.mk-card:focus-within{border-color:var(--text)}
+.mk-card-top{margin-bottom:15px}
+.mk-card h4{font-size:17px;font-weight:600;line-height:1.5;min-height:52px;margin-bottom:6px}
+.mk-org{font-size:13px;line-height:1.5;margin-bottom:16px}
+.mk-count{font-size:23px;line-height:1.2}
+.mk-card-foot{margin-top:auto;padding-top:12px}
+.mk-card-foot .btn{font-weight:500;min-height:38px}
+.mk-card.locked .mk-card-foot .btn{color:var(--text)}
+.mk-card.locked .tag.warn{color:var(--text);background:var(--neutral)}
+.mk-card-top .tiny{font-size:13px}
+.mk-card .tag{font-size:12px}
+.practice-mode.on{border:2px solid var(--text);background:var(--card)}
+.practice-mode strong{font-size:16px}
+.practice-mode span{font-size:13px}
+.practice-filters .row{align-items:center}
+#startBtn{min-height:44px}
+@media(max-width:1000px){
+  .app-header,.hd{height:56px}
+  .menu-open .logo{height:56px;min-height:56px}
+  .menu-open .menu-toggle{top:6px}
+  main{padding-top:24px}
+  .menu-open nav.tabs button:nth-of-type(8){margin-top:0}
+}
+@media(max-width:760px){
+  main{padding-top:20px}
+  .mk-hero{margin-bottom:20px}
+  .mk-hero h1{font-size:27px}
+  .mk-hero p{font-size:13px}
+  .mk-summary{margin-bottom:20px}
+  .mk-summary-item{padding:0 12px}
+  .mk-summary-item b{font-size:24px}
+  .mk-summary-item span{font-size:12px}
+  .mk-toolbar{gap:12px;margin-bottom:22px}
+  .search-field{order:0;flex:initial}
+  .mk-toolbar .chips{order:1;margin:0;justify-content:flex-start;gap:4px;overflow-x:auto;scrollbar-width:none}
+  .mk-toolbar .chips::-webkit-scrollbar{display:none}
+  .mk-toolbar .chip{flex:none;white-space:nowrap}
+  .mk-card,.mk-card.locked{min-height:194px}
+  .mk-card h4{font-size:16px;min-height:48px}
+  .mk-org{font-size:13px;margin-bottom:14px}
+  .practice-mode strong{font-size:15px}
+  .practice-mode span{font-size:12px}
+  .practice-filters .row{flex-wrap:wrap}
+  .practice-filters #fSearch{flex:1 0 100%}
+  .practice-filters #startBtn{flex:1 0 auto}
+}
+@media(max-width:480px){
+  main{padding-left:16px;padding-right:16px}
+  .mk-summary-item b{font-size:22px}
+  .mk-summary-item{padding:0 8px}
+  .mk-summary-item:first-child{padding-left:0}
+  .mk-summary-item span{font-size:12px;letter-spacing:-.01em}
+  .mk-card,.mk-card.locked{min-height:0;padding:17px 18px 13px}
+  .mk-card-top{margin-bottom:12px}
+  .mk-card h4{font-size:17px;min-height:0}
+  .mk-card-foot{padding-top:10px}
+  .catalog-heading h2{font-size:15px}
+}
