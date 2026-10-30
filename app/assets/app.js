@@ -257,7 +257,8 @@
     render();
     // 从题库页点「开始练」直接进答题，不用再点一次「开始练习」
     if (S.tab === 'practice' && opts && opts.autostart && !S.pq.length) startPractice();
-    window.scrollTo({ top: 0 });
+    if (S.tab === 'practice' && S.pq.length) scrollToPracticeQuestion();
+    else window.scrollTo({ top: 0 });
   }
 
   async function refreshCatalogContent(bank) {
@@ -703,6 +704,7 @@
     const filters = $('.practice-filters');
     if (filters && window.matchMedia('(max-width:760px)').matches) filters.open = false;
     renderPracticeQuestion();
+    scrollToPracticeQuestion();
   }
   function shuffle(a) {
     a = a.slice();
@@ -803,7 +805,7 @@
       };
     });
     $('#starBtn').onclick = () => { toggleStar(q.id); $('#starBtn').classList.toggle('on', isStar(q.id)); };
-    $('#prevBtn').onclick = () => { if (S.pi > 0) { S.pi--; renderPracticeQuestion(); } };
+    $('#prevBtn').onclick = () => { if (S.pi > 0) { S.pi--; renderPracticeQuestion(); scrollToPracticeQuestion(); } };
     $('#nextBtn').onclick = () => { if (S.pAnswered) nextPractice(); else { toast('先答一下，或点「看答案」'); } };
     $('#showBtn').onclick = () => revealAnswer();
     $('#reportBtn').onclick = () => reportQuestion(q);
@@ -979,8 +981,14 @@
   }
 
   function nextPractice() {
-    if (S.pi < S.pq.length - 1) { S.pi++; S.db.cursor = S.pq[S.pi].id; saveProgressSoon(); renderPracticeQuestion(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    if (S.pi < S.pq.length - 1) { S.pi++; S.db.cursor = S.pq[S.pi].id; saveProgressSoon(); renderPracticeQuestion(); }
     else { S.pi = S.pq.length; S.db.cursor = null; saveProgressSoon(); renderPracticeQuestion(); }
+    scrollToPracticeQuestion();
+  }
+
+  function scrollToPracticeQuestion() {
+    const body = $('#practiceBody');
+    if (body && !body.classList.contains('hide')) body.scrollIntoView({ block: 'start', behavior: 'auto' });
   }
 
   function renderPracticeEnd(body) {
@@ -2160,7 +2168,8 @@
       if (!b) return;
       S.tab = b.dataset.tab;
       render();
-      window.scrollTo({ top: 0 });
+      if (S.tab === 'practice' && S.pq.length) scrollToPracticeQuestion();
+      else window.scrollTo({ top: 0 });
     };
     $('#bankSelect').onchange = e => selectBank(e.target.value);
     $('#themeBtn').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
@@ -2185,7 +2194,7 @@
       }
       if (k === 'S') { e.preventDefault(); toggleStar(q.id); $('#starBtn').classList.toggle('on', isStar(q.id)); return; }
       if (e.key === 'ArrowRight' && S.pAnswered) { nextPractice(); return; }
-      if (e.key === 'ArrowLeft' && S.pi > 0) { S.pi--; renderPracticeQuestion(); return; }
+      if (e.key === 'ArrowLeft' && S.pi > 0) { S.pi--; renderPracticeQuestion(); scrollToPracticeQuestion(); return; }
       if (!S.pAnswered) {
         let key = k;
         if (/^[1-8]$/.test(k)) key = String.fromCharCode(64 + parseInt(k, 10));
