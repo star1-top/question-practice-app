@@ -1429,6 +1429,7 @@
         bindActs(list);
         $$('[data-open]', list).forEach(b => b.onclick = () => openCatalogBank(b.dataset.open));
         $$('[data-open-mine]', list).forEach(b => b.onclick = () => enterBank(b.dataset.openMine, { tab: 'practice', autostart: true }));
+        bindBankExport(list);
         bindBankDelete(list);
       };
       ['input', 'compositionend', 'search', 'change'].forEach(event =>
@@ -1438,6 +1439,7 @@
     bindActs(view);
     $$('[data-open]', view).forEach(b => b.onclick = () => openCatalogBank(b.dataset.open));
     $$('[data-open-mine]', view).forEach(b => b.onclick = () => enterBank(b.dataset.openMine, { tab: 'practice', autostart: true }));
+    bindBankExport(view);
     bindBankDelete(view);
   }
 
@@ -1469,6 +1471,7 @@
       + '<div class="mk-org">' + esc(b.subject || '本地导入') + '</div>'
       + '<div class="mk-card-foot"><span class="tiny muted">' + bankQCount(b) + ' 题</span>'
       + '<button class="btn sm" data-open-mine="' + esc(b.id) + '">开始练</button>'
+      + '<button class="btn sm ghost" data-export="' + esc(b.id) + '">导出 PDF</button>'
       + '<button class="btn sm ghost danger" data-del="' + esc(b.id) + '">删除</button></div>'
       + '</div>';
   }
@@ -1489,10 +1492,12 @@
           + (b.id !== S.bankId ? '<button class="btn sm" data-use="' + esc(b.id) + '">使用</button>' : '<span class="tag">使用中</span>')
           + (!b.cloudId && !b.builtin && C.session ? '<button class="btn sm soft" data-sync="' + esc(b.id) + '">同步到云端</button>' : '')
           + (b.cloudId ? '<button class="btn sm ghost" data-rename="' + esc(b.id) + '">重命名</button>' : '')
+          + '<button class="btn sm ghost" data-export="' + esc(b.id) + '">导出 PDF</button>'
           + '<button class="btn sm ghost danger" data-del="' + esc(b.id) + '">删除</button>'
           + '</div></div>';
       }).join('') + '</div>';
     $$('[data-use]', view).forEach(b => b.onclick = () => selectBank(b.dataset.use));
+    bindBankExport(view);
     bindBankDelete(view);
     $$('[data-sync]', view).forEach(b => b.onclick = async () => {
       const bank = S.banks.find(x => x.id === b.dataset.sync);
@@ -1523,6 +1528,16 @@
       catch (e) { toast('改名失败', 'bad'); }
     });
     bindActs(view);
+  }
+
+  function bindBankExport(view) {
+    $$('[data-export]', view).forEach(button => button.onclick = () => {
+      const bank = S.banks.find(item => item.id === button.dataset.export);
+      try {
+        Q.exportPdf.open(bank);
+        toast('请在打印窗口选择“另存为 PDF”', 'ok');
+      } catch (e) { toast(e.message || '导出失败，请重试', 'bad'); }
+    });
   }
 
   function bindBankDelete(view) {
